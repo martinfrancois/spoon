@@ -60,6 +60,7 @@ import spoon.reflect.declaration.CtEnumValue;
 import spoon.reflect.declaration.CtField;
 import spoon.reflect.declaration.CtInterface;
 import spoon.reflect.declaration.CtMethod;
+import spoon.reflect.declaration.CtModule;
 import spoon.reflect.declaration.CtNamedElement;
 import spoon.reflect.declaration.CtPackage;
 import spoon.reflect.declaration.CtParameter;
@@ -73,6 +74,7 @@ import spoon.reflect.visitor.filter.TypeFilter;
 import spoon.support.DefaultCoreFactory;
 import spoon.support.JavaOutputProcessor;
 import spoon.support.StandardEnvironment;
+import spoon.support.compiler.VirtualFile;
 import spoon.support.compiler.jdt.JDTSnippetCompiler;
 import spoon.support.reflect.code.CtCommentImpl;
 import spoon.test.comment.testclasses.BlockComment;
@@ -1277,7 +1279,7 @@ public class CommentTest {
 	}
 
 	@ModelTest("./src/test/java/spoon/test/comment/testclasses/ArrayAccessComments.java")
-	@GitHubIssue(issueNumber = 2482, fixed = false)
+	@GitHubIssue(issueNumber = 2482, fixed = true)
 	public void testArrayAccessComments(CtModel model) {
 		//contract: comments at array accesses should be properly added to the AST
 		List<CtComment> comments = model.getElements(new TypeFilter<>(CtComment.class));
@@ -1294,7 +1296,7 @@ public class CommentTest {
 	}
 
 	@ModelTest("./src/test/java/spoon/test/comment/testclasses/BinaryOperatorComments.java")
-	@GitHubIssue(issueNumber = 2482, fixed = false)
+	@GitHubIssue(issueNumber = 2482, fixed = true)
 	public void testBinaryOperatorComments(CtModel model) {
 		//contract: comments at binary operators should be properly added to the AST
 		List<CtComment> comments = model.getElements(new TypeFilter<>(CtComment.class));
@@ -1305,6 +1307,39 @@ public class CommentTest {
 
 		assertEquals(1, binaryOperators.get(0).getComments().size());
 		assertEquals("comment 1", binaryOperators.get(0).getComments().get(0).getContent());
+	}
+
+	@ModelTest(code = "@Deprecated(/* marker */) class CommentInEmptyAnnotation {}")
+	public void testCommentInEmptyAnnotationFallsBackToAnnotation(CtModel model) {
+		// contract: a comment is retained on its enclosing annotation when the annotation has no value expression
+		CtAnnotation<?> annotation = model.getElements(new TypeFilter<>(CtAnnotation.class)).get(0);
+
+		org.assertj.core.api.Assertions.assertThat(annotation.getComments())
+			.extracting(CtComment::getContent)
+			.containsExactly("marker");
+	}
+
+	@Test
+	public void testCommentInModuleWithoutDirectivesFallsBackToModule() {
+		// contract: a comment is retained on its enclosing module when there is no directive to receive it
+		Launcher launcher = new Launcher();
+		launcher.getEnvironment().setComplianceLevel(9);
+		launcher.getEnvironment().setNoClasspath(true);
+		launcher.addInputResource(new VirtualFile("""
+			module comment.fallback {
+				// exports disabled
+			}
+			""", "module-info.java"));
+
+		CtModel model = launcher.buildModel();
+		CtModule module = model.getAllModules().stream()
+			.filter(candidate -> candidate.getSimpleName().equals("comment.fallback"))
+			.findFirst()
+			.orElseThrow();
+
+		org.assertj.core.api.Assertions.assertThat(module.getComments())
+			.extracting(CtComment::getContent)
+			.containsExactly("exports disabled");
 	}
 
 	@ModelTest("./src/test/java/spoon/test/comment/testclasses/TypeParameterComments.java")
