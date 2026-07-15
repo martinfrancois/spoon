@@ -114,7 +114,8 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 			return (CtTypeParameter) parent;
 		}
 
-		if (parent instanceof CtTypeReference) {
+		boolean nestedInTypeReference = parent instanceof CtTypeReference;
+		if (nestedInTypeReference) {
 			if (!parent.isParentInitialized()) {
 				// we might enter in that case because of a call
 				// of getSuperInterfaces() for example
@@ -125,6 +126,12 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 				}
 			} else {
 				parent = parent.getParent();
+			}
+		}
+		if (nestedInTypeReference) {
+			CtTypeParameter lexicalDeclaration = findTypeParamDeclarationInParents(this);
+			if (lexicalDeclaration != null) {
+				return lexicalDeclaration;
 			}
 		}
 
@@ -151,6 +158,18 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 				return result;
 			}
 			typeDeclarer = typeDeclarer.getParent(CtFormalTypeDeclarer.class);
+		}
+		return null;
+	}
+
+	private CtTypeParameter findTypeParamDeclarationInParents(CtElement element) {
+		CtFormalTypeDeclarer typeDeclarer = element.getParent(CtFormalTypeDeclarer.class);
+		while (typeDeclarer != null) {
+			CtTypeParameter result = findTypeParamDeclaration(typeDeclarer, getSimpleName());
+			if (result != null) {
+				return result;
+			}
+			typeDeclarer = ((CtElement) typeDeclarer).getParent(CtFormalTypeDeclarer.class);
 		}
 		return null;
 	}
