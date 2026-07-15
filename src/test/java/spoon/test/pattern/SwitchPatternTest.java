@@ -77,6 +77,41 @@ class SwitchPatternTest {
 	}
 
 	@Test
+	void testMultipleTypePatternsWithGuardInSwitch() {
+		// contract: each alternative of a guarded multi-pattern case is represented as a case pattern
+		CtModel model = createModelFromString("""
+			sealed interface Base permits First, Second {}
+			final class First implements Base {}
+			final class Second implements Base {}
+			class Foo {
+				int select(Base value, boolean enabled) {
+					switch (value) {
+						case First _, Second _ when enabled: return 1;
+						default: return 0;
+					}
+				}
+			}
+			""");
+
+		CtSwitch<?> ctSwitch = model.getElements(new TypeFilter<>(CtSwitch.class)).get(0);
+		CtCase<?> ctCase = ctSwitch.getCases().get(0);
+
+		assertThat(ctCase.getCaseExpressions())
+			.hasSize(2)
+			.allSatisfy(expression -> {
+				assertThat(expression).isInstanceOf(CtCasePattern.class);
+				assertThat(expression.getParent()).isSameAs(ctCase);
+				CtPattern pattern = ((CtCasePattern) expression).getPattern();
+				assertThat(pattern).isInstanceOf(CtTypePattern.class);
+				assertThat(pattern.getParent()).isSameAs(expression);
+			});
+		assertThat(ctCase.getGuard())
+			.isNotNull()
+			.extracting(CtExpression::getParent)
+			.isSameAs(ctCase);
+	}
+
+	@Test
 	void testCaseNull() {
 		// contract: "case null" is represented by a null literal
 		CtSwitch<?> sw = createFromSwitchStatement("case null");
