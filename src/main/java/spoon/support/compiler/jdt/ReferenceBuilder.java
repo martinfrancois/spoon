@@ -54,6 +54,7 @@ import org.eclipse.jdt.internal.compiler.lookup.PolyTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemMethodBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemPackageBinding;
+import org.eclipse.jdt.internal.compiler.lookup.ProblemReasons;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemReferenceBinding;
 import org.eclipse.jdt.internal.compiler.lookup.RawTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ReferenceBinding;
@@ -61,6 +62,7 @@ import org.eclipse.jdt.internal.compiler.lookup.Scope;
 import org.eclipse.jdt.internal.compiler.lookup.SourceTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.SyntheticFactoryMethodBinding;
 import org.eclipse.jdt.internal.compiler.lookup.TypeBinding;
+import org.eclipse.jdt.internal.compiler.lookup.TypeConstants;
 import org.eclipse.jdt.internal.compiler.lookup.TypeVariableBinding;
 import org.eclipse.jdt.internal.compiler.lookup.UnresolvedReferenceBinding;
 import org.eclipse.jdt.internal.compiler.lookup.VariableBinding;
@@ -587,6 +589,9 @@ public class ReferenceBuilder {
 			} else if (messageSend.receiver instanceof QualifiedNameReference) {
 				ref.setDeclaringType(jdtTreeBuilder.getHelper().createTypeAccessNoClasspath((QualifiedNameReference) messageSend.receiver).getAccessedType());
 			}
+		} else if (messageSend.receiver instanceof SingleNameReference singleNameReference
+				&& singleNameReference.binding instanceof LocalVariableBinding localVariableBinding) {
+			ref.setDeclaringType(getLocalVariableTypeReference(localVariableBinding));
 		} else {
 			ref.setDeclaringType(getTypeReference(messageSend.receiver.resolvedType));
 		}
@@ -1338,7 +1343,7 @@ public class ReferenceBuilder {
 			} else {
 				CtLocalVariableReference<T> ref = this.jdtTreeBuilder.getFactory().Core().createLocalVariableReference();
 				ref.setSimpleName(new String(varbin.name));
-				CtTypeReference<T> ref2 = getTypeReference(varbin.type);
+				CtTypeReference<T> ref2 = getLocalVariableTypeReference(localVariableBinding);
 				ref.setType(ref2);
 				return ref;
 			}
@@ -1346,6 +1351,22 @@ public class ReferenceBuilder {
 			// unknown VariableBinding, the caller must do something
 			return null;
 		}
+	}
+
+	private <T> CtTypeReference<T> getLocalVariableTypeReference(LocalVariableBinding binding) {
+		if (binding.type instanceof ProblemReferenceBinding problemBinding
+				&& problemBinding.problemId() == ProblemReasons.InvalidTypeForAutoManagedResource
+				&& jdtTreeBuilder.getFactory().getEnvironment().getComplianceLevel() >= 10
+				&& binding.declaration.type != null
+				&& CharOperation.equals(binding.declaration.type.getLastToken(), TypeConstants.VAR)
+				&& binding.declaration.initialization instanceof AllocationExpression allocation
+				&& allocation.resolvedType != null
+				&& allocation.resolvedType.isAnonymousType()
+				&& allocation.type != null
+				&& allocation.type.resolvedType != null) {
+			return getTypeReference(allocation.type.resolvedType);
+		}
+		return getTypeReference(binding.type);
 	}
 
 	<T> CtVariableReference<T> getVariableReference(ProblemBinding binding) {
