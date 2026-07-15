@@ -9,27 +9,44 @@ package spoon.support.reflect.reference;
 
 import spoon.SpoonException;
 import spoon.reflect.declaration.CtElement;
+import spoon.reflect.declaration.CtExecutable;
 import spoon.reflect.declaration.CtFormalTypeDeclarer;
-import spoon.reflect.declaration.CtMethod;
 import spoon.reflect.declaration.CtType;
 import spoon.reflect.declaration.CtTypeParameter;
 import spoon.reflect.reference.CtActualTypeContainer;
+import spoon.reflect.reference.CtArrayTypeReference;
 import spoon.reflect.reference.CtExecutableReference;
 import spoon.reflect.reference.CtTypeParameterReference;
 import spoon.reflect.reference.CtTypeReference;
+import spoon.reflect.reference.CtWildcardReference;
 import spoon.reflect.visitor.CtVisitor;
 import spoon.support.DerivedProperty;
 import spoon.support.UnsettableProperty;
 
 import java.lang.reflect.AnnotatedElement;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> implements CtTypeParameterReference {
 	private static final long serialVersionUID = 1L;
+	// Executable matching erases its parameters and can re-enter declaration lookup through a sibling reference.
+	private static final ThreadLocal<Set<CtExecutableReference<?>>> RESOLVING_EXECUTABLE_DECLARATIONS =
+			ThreadLocal.withInitial(() -> Collections.newSetFromMap(new IdentityHashMap<>()));
+	private static final String LEXICALLY_BOUND_METADATA = CtTypeParameterReferenceImpl.class.getName() + ".lexicallyBound";
 
 
 	public CtTypeParameterReferenceImpl() {
+	}
+
+	@Override
+	public <E extends CtElement> E setParent(CtElement parent) {
+		if (parent instanceof CtTypeParameter) {
+			putMetadata(LEXICALLY_BOUND_METADATA, true);
+		}
+		return super.setParent(parent);
 	}
 
 	@Override
@@ -113,8 +130,8 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 			 */
 			return (CtTypeParameter) parent;
 		}
-
-		if (parent instanceof CtTypeReference) {
+		boolean nestedInTypeReference = parent instanceof CtTypeReference;
+		while (parent instanceof CtTypeReference) {
 			if (!parent.isParentInitialized()) {
 				// we might enter in that case because of a call
 				// of getSuperInterfaces() for example
@@ -123,19 +140,35 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 				if (typeDeclarer == null) {
 					return null;
 				}
+				break;
 			} else {
 				parent = parent.getParent();
 			}
 		}
-
+		CtTypeParameter lexicalDeclaration = nestedInTypeReference
+				? findTypeParamDeclarationInParents(this)
+				: null;
+		if (Boolean.TRUE.equals(getMetadata(LEXICALLY_BOUND_METADATA)) && lexicalDeclaration != null) {
+			return lexicalDeclaration;
+		}
 		if (parent instanceof CtExecutableReference) {
 			CtExecutableReference parentExec = (CtExecutableReference) parent;
-			if (Objects.nonNull(parentExec.getDeclaringType()) && !parentExec.getDeclaringType().equals(typeDeclarer)) {
-				CtElement parent2 = parentExec.getExecutableDeclaration();
-				if (parent2 instanceof CtMethod) {
+			if (Objects.nonNull(parentExec.getDeclaringType())
+					&& !parentExec.getDeclaringType().equals(typeDeclarer)) {
+				CtElement parent2 = getExecutableDeclaration(parentExec);
+				if (parent2 instanceof CtExecutable) {
+					CtTypeParameter executableDeclaration = findCorrespondingTypeParameter(
+							parentExec,
+							(CtExecutable<?>) parent2);
+					if (executableDeclaration != null) {
+						return executableDeclaration;
+					}
 					typeDeclarer = parent2;
 				}
 			}
+		}
+		if (lexicalDeclaration != null) {
+			return lexicalDeclaration;
 		}
 
 		if (!(typeDeclarer instanceof CtFormalTypeDeclarer)) {
@@ -151,6 +184,104 @@ public class CtTypeParameterReferenceImpl extends CtTypeReferenceImpl<Object> im
 				return result;
 			}
 			typeDeclarer = typeDeclarer.getParent(CtFormalTypeDeclarer.class);
+		}
+		return null;
+	}
+
+	private CtElement getExecutableDeclaration(CtExecutableReference<?> executableReference) {
+		Set<CtExecutableReference<?>> resolving = RESOLVING_EXECUTABLE_DECLARATIONS.get();
+		if (!resolving.add(executableReference)) {
+			return null;
+		}
+		try {
+			return executableReference.getExecutableDeclaration();
+		} finally {
+			resolving.remove(executableReference);
+			if (resolving.isEmpty()) {
+				RESOLVING_EXECUTABLE_DECLARATIONS.remove();
+			}
+		}
+	}
+
+	private CtTypeParameter findCorrespondingTypeParameter(
+			CtExecutableReference<?> executableReference,
+			CtExecutable<?> executableDeclaration) {
+		List<CtTypeReference<?>> referenceParameters = executableReference.getParameters();
+		for (int index = 0; index < referenceParameters.size() && index < executableDeclaration.getParameters().size(); index++) {
+			CtTypeParameter result = findCorrespondingTypeParameter(
+					referenceParameters.get(index),
+					executableDeclaration.getParameters().get(index).getType());
+			if (result != null) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	private CtTypeParameter findCorrespondingTypeParameter(
+			CtTypeReference<?> referenceType,
+			CtTypeReference<?> declarationType) {
+		if (referenceType == null || declarationType == null) {
+			return null;
+		}
+		if (referenceType == this) {
+			if (declarationType instanceof CtTypeParameterReference
+					&& declarationType.getSimpleName().equals(getSimpleName())) {
+				return ((CtTypeParameterReference) declarationType).getDeclaration();
+			}
+			return null;
+		}
+		if (referenceType instanceof CtWildcardReference && declarationType instanceof CtWildcardReference) {
+			if (((CtWildcardReference) referenceType).isUpper()
+					!= ((CtWildcardReference) declarationType).isUpper()) {
+				return null;
+			}
+			return findCorrespondingTypeParameter(
+					((CtWildcardReference) referenceType).getBoundingType(),
+					((CtWildcardReference) declarationType).getBoundingType());
+		}
+		if (referenceType instanceof CtArrayTypeReference && declarationType instanceof CtArrayTypeReference) {
+			return findCorrespondingTypeParameter(
+					((CtArrayTypeReference<?>) referenceType).getComponentType(),
+					((CtArrayTypeReference<?>) declarationType).getComponentType());
+		}
+		if (referenceType instanceof CtWildcardReference
+				|| declarationType instanceof CtWildcardReference
+				|| referenceType instanceof CtArrayTypeReference
+				|| declarationType instanceof CtArrayTypeReference
+				|| !Objects.equals(referenceType.getQualifiedName(), declarationType.getQualifiedName())) {
+			return null;
+		}
+		CtTypeParameter result = findCorrespondingTypeParameter(
+				referenceType.getDeclaringType(), declarationType.getDeclaringType());
+		if (result != null) {
+			return result;
+		}
+		List<CtTypeReference<?>> referenceArguments = referenceType.getActualTypeArguments();
+		List<CtTypeReference<?>> declarationArguments = declarationType.getActualTypeArguments();
+		for (int index = 0; index < referenceArguments.size() && index < declarationArguments.size(); index++) {
+			result = findCorrespondingTypeParameter(
+					referenceArguments.get(index),
+					declarationArguments.get(index));
+			if (result != null) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	private CtTypeParameter findTypeParamDeclarationInParents(CtElement element) {
+		CtFormalTypeDeclarer typeDeclarer = element.getParent(CtFormalTypeDeclarer.class);
+		return findTypeParamDeclarationInHierarchy(typeDeclarer);
+	}
+
+	private CtTypeParameter findTypeParamDeclarationInHierarchy(CtFormalTypeDeclarer typeDeclarer) {
+		while (typeDeclarer != null) {
+			CtTypeParameter result = findTypeParamDeclaration(typeDeclarer, getSimpleName());
+			if (result != null) {
+				return result;
+			}
+			typeDeclarer = ((CtElement) typeDeclarer).getParent(CtFormalTypeDeclarer.class);
 		}
 		return null;
 	}
