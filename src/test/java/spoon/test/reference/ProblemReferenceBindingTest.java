@@ -12,6 +12,21 @@ import spoon.reflect.visitor.filter.TypeFilter;
 
 class ProblemReferenceBindingTest {
 	@Test
+	void conditionalAnonymousResourceCanBeUsedAsAConstructorArgument() {
+		// contract: inferred anonymous resources nested in argument expressions retain their declared type
+		// (SPOON-ISSUE-PLACEHOLDER-01)
+		// given
+		Launcher launcher = launcherForAnonymousResourceProblemBinding();
+
+		// when
+		var model = launcher.buildModel();
+
+		// then
+		assertThat(constructorParameter(model, "MissingConditionalWrapper").getSimpleName())
+				.isEqualTo("MissingResource");
+	}
+
+	@Test
 	void anonymousResourceProblemBindingUsesItsDeclaredTypeName() {
 		// contract: unresolved anonymous resources use a legal type name for later invocations
 		// (SPOON-ISSUE-PLACEHOLDER-01)

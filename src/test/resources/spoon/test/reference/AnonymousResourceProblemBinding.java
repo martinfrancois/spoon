@@ -4,6 +4,18 @@ import ext.ImportedResource;
 import ext.QualifiedOuter.Resource;
 
 class AnonymousResourceProblemBinding {
+	boolean selectFirst;
+
+	void useConditionalAnonymousResourceAsConstructorArgument() {
+		try (
+			var resource = new MissingResource() {
+			};
+			var wrapper = new MissingConditionalWrapper(selectFirst ? resource : resource)
+		) {
+			wrapper.consume();
+		}
+	}
+
 	void useAnonymousResourceAsConstructorArgument() {
 		try (
 			var resource = new MissingResource() {
